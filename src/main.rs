@@ -8,19 +8,32 @@ use chrono::Local;
 #[derive(Debug, Deserialize, Clone)]
 pub struct Expl {
     primer: Vec<usize>,
-    chel: usize,
-}
+    chel: usize}
+
+#[cfg(feature = "cuda")]
+pub type Mb = burn::backend::cuda::Cuda;
+#[cfg(feature = "cuda")]
+pub type Md = burn::backend::cuda::CudaDevice;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub type Mb = burn::backend::rocm::Rocm;
+#[cfg(all(feature = "rocm", not(feature = "cuda")))]
+pub type Md = burn::backend::rocm::HipDevice;
+#[cfg(all(feature = "wgpu", not(feature = "cuda"), not(feature = "rocm")))]
+pub type Mb = burn::backend::wgpu::Wgpu;
+#[cfg(all(feature = "wgpu", not(feature = "cuda"), not(feature = "rocm")))]
+pub type Md = burn::backend::wgpu::WgpuDevice;
+
 static SLOVHS: Lazy<HashMap<String, usize>> = Lazy::new(||{let contentek = fs::read_to_string("slovar.json").unwrap_or_else(|e| panic!("Не прочитано slovar.json: {}", e));
     serde_json::from_str(&contentek).unwrap_or_else(|e| panic!("С парсингом что то не так: {}", e))});
-static CARTA: Lazy<WgpuDevice> = Lazy::new(|| {burn::backend::wgpu::WgpuDevice::default()});
+static CARTA: Lazy<Md> = Lazy::new(|| Md::default());
 const SQLL: usize = 15;
 pub struct Btch;
 impl Btch{
     pub fn nw() -> Self{
         Self}}
 
-impl Batcher<Wgpu, Expl, (Tensor<Autodiff<Wgpu>, 2, Float>, Tensor<Autodiff<Wgpu>, 1, Float>)> for Btch{
-    fn batch(&self, items: Vec<Expl>, device: &WgpuDevice) -> (Tensor<Autodiff<Wgpu>, 2, Float>, Tensor<Autodiff<Wgpu>, 1, Float>){
+impl Batcher<Mb, Expl, (Tensor<Autodiff<Mb>, 2, Float>, Tensor<Autodiff<Mb>, 1, Float>)> for Btch{
+    fn batch(&self, items: Vec<Expl>, device: &Md) -> (Tensor<Autodiff<Mb>, 2, Float>, Tensor<Autodiff<Mb>, 1, Float>){
         let mxlen = items.iter().map(|item| item.primer.len()).max().unwrap_or(0);
         let mut inf = Vec::with_capacity(items.len() * mxlen);
         let mut cheli = Vec::with_capacity(items.len());
@@ -30,9 +43,9 @@ impl Batcher<Wgpu, Expl, (Tensor<Autodiff<Wgpu>, 2, Float>, Tensor<Autodiff<Wgpu
             inf.extend(bz);
             cheli.push(i.chel as i64);}
         let inf_f32: Vec<f32> = inf.iter().map(|&x| x as f32).collect();
-        let inputs = Tensor::<Autodiff<Wgpu>, 2, Float>::from_data(TensorData::new(inf_f32.clone(), Shape::new([items.len(), mxlen])),device,);
+        let inputs = Tensor::<Autodiff<Mb>, 2, Float>::from_data(TensorData::new(inf_f32.clone(), Shape::new([items.len(), mxlen])),device,);
         let cheli_f32: Vec<f32> = cheli.iter().map(|&x| x as f32).collect();
-        let targets = Tensor::<Autodiff<Wgpu>, 1, Float>::from_data(TensorData::new(cheli_f32, Shape::new([items.len()])), device);
+        let targets = Tensor::<Autodiff<Mb>, 1, Float>::from_data(TensorData::new(cheli_f32, Shape::new([items.len()])), device);
         println!("items.len(): {}, mxlen: {}", items.len(), mxlen);
         println!("inf_f32.len(): {}", inf_f32.len());
         (inputs, targets)}}
@@ -57,7 +70,7 @@ impl<B: Backend> Madelka<B>{
         let lstout = outp.clone().slice([0.., outp.dims()[1] - 1.., 0..]).squeeze_dim::<2>(1);
         self.vixod.forward(self.drop.forward(lstout))}}
 
-fn degenerat(madel: Madelka<Autodiff<Wgpu>>, zatrav: Vec<String>, leng: i32, qcold: f32) -> Vec<usize>{
+fn degenerat(madel: Madelka<Autodiff<Mb>>, zatrav: Vec<String>, leng: i32, qcold: f32) -> Vec<usize>{
     let mut veci: Vec<usize> = Vec::new();
     let mut uw: Vec<usize> = Vec::new();
     for slov in zatrav{
@@ -73,7 +86,7 @@ else{
 while razr.len() < SQLL {
     razr.insert(0, 0);}
     let razrf: Vec<f32> = razr.iter().map(|&x| x as f32).collect();
-    let tnssr = Tensor::<Autodiff<Wgpu>, 2, Float>::from_data(TensorData::new(razrf, Shape::new([1, SQLL])), &*CARTA);
+    let tnssr = Tensor::<Autodiff<Mb>, 2, Float>::from_data(TensorData::new(razrf, Shape::new([1, SQLL])), &*CARTA);
     let predskaz = madel.goahead(tnssr);
     let probs = burn::tensor::activation::softmax(predskaz / qcold, 1);
     let mut probsasv: Vec<f32> = probs.to_data().into_vec().expect("Не получилось конвертировать в Vecf32");
@@ -87,7 +100,7 @@ while razr.len() < SQLL {
     veci
 }
 fn startmodel() -> Result<(), Box<dyn std::error::Error>>{
-    type Bck = Autodiff<Wgpu>;
+    type Bck = Autodiff<Mb>;
     let logepoh = [0, 1, 2, 3, 4, 5, 10, 100, 500, 1000, 5000, 10000];//КАКИЕ ЭПОХИ БУДУТ ЛОГИРОВАТЬСЯ
     let her: Vec<Expl> = serde_json::from_str(&fs::read_to_string("chel.json")?)?;
     let _dtset = InMemDataset::new(her);
@@ -115,5 +128,4 @@ fn startmodel() -> Result<(), Box<dyn std::error::Error>>{
 }
 fn main() -> Result<(), Box<dyn std::error::Error>>{
     println!("Привет! Тут будет скрипт для создания словаря и целей");
-    startmodel()
-}
+    startmodel()}
